@@ -1,5 +1,6 @@
 package com.example.myapplication12_5;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -7,7 +8,9 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -175,9 +178,8 @@ public class MainActivity extends Activity {
 
     /**
      * 初始化设置Camera.打开摄像头
-     *
+     * <p>
      * 默认是先打开前置摄像头，如果没有前置摄像头的话就打开后置摄像头
-     *
      */
     @SuppressLint("NewApi")
     private void openCamera() {
@@ -359,17 +361,30 @@ public class MainActivity extends Activity {
                                 @Override
                                 public void run() {
                                     resultTv.setText(prefixResult + result);
-                                    VoicePool.get().playTTs(result, NORMAL, new VoiceListener() {
-                                        @Override
-                                        public void onCompleted() {
+                                    if (result == "") {
+                                        VoicePool.get().playTTs("没听清楚，请再说一次", HIGH, new VoiceListener() {
+                                            @Override
+                                            public void onCompleted() {
 
-                                        }
+                                            }
 
-                                        @Override
-                                        public void onError(int i, String s) {
+                                            @Override
+                                            public void onError(int i, String s) {
 
-                                        }
-                                    });
+                                            }
+                                        });
+                                    } else {
+                                        new Thread(new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                try {
+                                                    getByName(result);
+                                                } catch (IOException e) {
+                                                    e.printStackTrace();
+                                                }
+                                            }
+                                        }).start();
+                                    }
                                 }
                             });
                         }
@@ -514,6 +529,7 @@ public class MainActivity extends Activity {
         OutputStream out = s.getOutputStream();//读到的写入
         byte[] b = new byte[1024];
         int len = 0;
+        out.write(1);
         while ((len = fis.read(b)) != -1) {
             out.write(b, 0, len);
         }
@@ -521,31 +537,101 @@ public class MainActivity extends Activity {
         InputStream in = s.getInputStream();//读服务端返回数据
         byte[] bin = new byte[1024];
         int num = in.read(bin);
-        final String read_str =new String(bin, 0, num);
-        Log.i("main",read_str);
+        final String read_str = new String(bin, 0, num);
+        Log.i("main", read_str);
+        fis.close();
+        s.close();
+    }
+
+    public void getByName(String name) throws IOException {
+        System.out.println("fffffffffffffffffffff" + name);
+        Socket s = new Socket("10.128.63.126", 12345);//建立服务
+        OutputStream out = s.getOutputStream();//读到的写入
+        out.write(0);
+        PrintWriter pw = new PrintWriter(out);
+        pw.write(name);
+        pw.flush();
+        s.shutdownOutput();//标记结束
+        InputStream in = s.getInputStream();//读服务端返回数据
+        BufferedReader br = new BufferedReader(new InputStreamReader(in));
+
+        String reply = null;
+        while (((reply = br.readLine()) == null)) {
+            ;
+        }
+        String finalReply = reply;
         new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
-                    JSONObject jsonObj = new JSONObject(read_str);
-                    String age = (String) jsonObj.get("age");
-                    VoicePool.get().playTTs(age,HIGH , new VoiceListener() {
-                        @Override
-                        public void onCompleted() {
-                            Log.i("Main","tts Success");
-                        }
-
-                        @Override
-                        public void onError(int i, String s) {
-                            Log.i("Main","tts Failed");
-                        }
-                    });
+                    System.out.println(finalReply);
+                    JSONObject jsonObj = new JSONObject(finalReply);
+                    String position_x = (String) jsonObj.get("position_x");
+                    String position_y = (String) jsonObj.get("position_y");
+                    Log.i("ffffff", position_x + "___" + position_y);
+                    sayWhere(name, 1, 2, 3, 4);
+//                    VoicePool.get().playTTs(age,HIGH , new VoiceListener() {
+//                        @Override
+//                        public void onCompleted() {
+//                            Log.i("Main","tts Success");
+//                        }
+//
+//                        @Override
+//                        public void onError(int i, String s) {
+//                            Log.i("Main","tts Failed");
+//                        }
+//                    });
                 } catch (JSONException e) {
                     e.printStackTrace();
                 }
             }
         }).start();
-        fis.close();
         s.close();
     }
+
+    public void sayWhere(String name, int position1_x, int position1_y, int position2_x, int position2_y) {
+        int position_x = (position1_x + position2_x) / 2;
+        int position_y = (position1_y + position2_y) / 2;
+        int x_one = 1, x_two = 2;
+        int y_one = 3, y_two = 4;
+        String location;
+        if (position_x < x_one) {
+            if (position_y < y_one) {
+                location = "左上角";
+            } else if (position_y > y_two) {
+                location = "左下角";
+            } else {
+                location = "左侧";
+            }
+        } else if (position_x > x_two) {
+            if (position_y < y_one) {
+                location = "右上角";
+            } else if (position_y > y_two) {
+                location = "右下角";
+            } else {
+                location = "右侧";
+            }
+        } else {
+            if (position_y < y_one) {
+                location = "上方";
+            } else if (position_y > y_two) {
+                location = "下方";
+            } else {
+                location = "中间";
+            }
+        }
+        String result1 = name + "在桌面" + location;
+        VoicePool.get().playTTs(result1, HIGH, new VoiceListener() {
+            @Override
+            public void onCompleted() {
+
+            }
+
+            @Override
+            public void onError(int i, String s) {
+
+            }
+        });
+    }
 }
+
