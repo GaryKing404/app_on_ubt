@@ -1,5 +1,6 @@
 package com.example.myapplication12_5;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -24,19 +25,28 @@ import android.hardware.Camera;
 import android.hardware.Camera.AutoFocusCallback;
 import android.hardware.Camera.CameraInfo;
 import android.hardware.Camera.PictureCallback;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
 import android.os.Bundle;
+import android.text.TextUtils;
 import android.text.format.DateFormat;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
+import android.widget.TextView;
 import android.widget.Toast;
 
+import com.ubtrobot.mini.properties.sdk.PropertiesApi;
 import com.ubtrobot.mini.voice.VoiceListener;
 import com.ubtrobot.mini.voice.VoicePool;
+import com.ubtrobot.speech.SpeechApiExtra;
+import com.ubtrobot.speech.asr.AsrRequest;
 
 import org.json.*;
 
+import static android.media.AudioRecord.getMinBufferSize;
 import static com.ubtrobot.commons.Priority.HIGH;
 import static com.ubtrobot.commons.Priority.NORMAL;
 
@@ -47,6 +57,15 @@ public class MainActivity extends Activity {
 
     private Camera camera;
     private boolean isPreviewing;
+    private Button switcherBtn;
+    private TextView resultTv;
+
+    String switchText1 = "开始录音识别";
+    String switchText2 = "结束录音识别";
+
+    String prefixResult = "识别结果为: \n";
+    AudioHandler mAudioHandler;
+
     private Button button;
     private Button button1;
     private ImageView picture;
@@ -61,11 +80,30 @@ public class MainActivity extends Activity {
         button = findViewById(R.id.getpic);
         button1 = findViewById(R.id.playtts);
         picture = findViewById(R.id.picture);
+        switcherBtn = (Button) findViewById(R.id.switch_btn);
+        resultTv = (TextView) findViewById(R.id.result_tv);
+        switcherBtn.setText(switchText1);
+        mAudioHandler = new AudioHandler();
+
         button.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 //deleteFile();
                 openCamera();
+            }
+        });
+
+        switcherBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                CharSequence text = switcherBtn.getText().toString().trim();
+                boolean asrStart = TextUtils.equals(switchText1, text);
+                mAudioHandler.setSwitch(asrStart);
+                if (asrStart) {
+                    switcherBtn.setText(switchText2);
+                } else {
+                    switcherBtn.setText(switchText1);
+                }
             }
         });
 
@@ -279,8 +317,199 @@ public class MainActivity extends Activity {
         }
     }
 
+    class AudioHandler implements Runnable {
+
+        private final int minBufferSize;
+        private AudioRecord audioRecord;
+        private volatile File outputFile;
+        private volatile FileOutputStream os;
+        private volatile byte[] buffer;
+
+        AudioHandler() {
+            minBufferSize = getMinBufferSize(16000, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
+            audioRecord = createRecorder();
+        }
+
+        private AudioRecord createRecorder() {
+            return new AudioRecord(MediaRecorder.AudioSource.MIC, 16000, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT, minBufferSize);
+        }
+
+        boolean switcher;
+
+        synchronized void setSwitch(boolean switcher) {
+            this.switcher = switcher;
+            if (switcher) {
+                outputFile = createOutputFile();
+                attachOutput(outputFile);
+                if (audioRecord == null) {
+                    audioRecord = createRecorder();
+                }
+                new Thread(this).start();
+            } else {
+                //识别
+                SpeechApiExtra speechApiExtra = SpeechApiExtra.get();
+                if (outputFile != null && outputFile.length() > 0) {
+                    new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            speechApiExtra.beginAsrSession(AsrRequest.SampleRate.Rate16K, 2);
+                            speechApiExtra.asr(readFile2Bytes(outputFile));
+                            final String result = speechApiExtra.endAsrSession();
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    resultTv.setText(prefixResult + result);
+                                    VoicePool.get().playTTs(result, NORMAL, new VoiceListener() {
+                                        @Override
+                                        public void onCompleted() {
+
+                                        }
+
+                                        @Override
+                                        public void onError(int i, String s) {
+
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                    }).start();
+
+                }
+            }
+        }
+
+        public byte[] readFile2Bytes(File file) {
+            if (file == null) {
+                return null;
+            } else {
+                try {
+                    return inputStream2Bytes(new FileInputStream(file));
+                } catch (FileNotFoundException var2) {
+                    var2.printStackTrace();
+                    return null;
+                }
+            }
+        }
+
+        private byte[] inputStream2Bytes(InputStream is) {
+            return is == null ? null : input2OutputStream(is).toByteArray();
+        }
+
+        private ByteArrayOutputStream input2OutputStream(InputStream is) {
+            if (is == null) {
+                return null;
+            } else {
+                Object var2;
+                try {
+                    ByteArrayOutputStream os = new ByteArrayOutputStream();
+                    byte[] b = new byte[1024];
+
+                    int len;
+                    while ((len = is.read(b, 0, 1024)) != -1) {
+                        os.write(b, 0, len);
+                    }
+
+                    ByteArrayOutputStream var4 = os;
+                    return var4;
+                } catch (IOException var8) {
+                    var8.printStackTrace();
+                    var2 = null;
+                } finally {
+
+                    try {
+                        is.close();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+
+                return (ByteArrayOutputStream) var2;
+            }
+        }
+
+
+        public synchronized void attachOutput(File output) {
+            if (os != null) {
+                closeQuiet(os);
+            }
+            try {
+                this.os = new FileOutputStream(output, false);
+            } catch (FileNotFoundException e) {
+                e.printStackTrace();
+                Log.e("AudioHandler", "FileNotFoundException: " + e.getMessage());
+            }
+            if (this.os != null) {
+                buffer = new byte[minBufferSize];
+            }
+        }
+
+        @Override
+        public void run() {
+            while (switcher) {
+                if (audioRecord != null && audioRecord.getState() == AudioRecord.STATE_INITIALIZED) {
+                    audioRecord.startRecording();
+                    if (readError()) {
+                        Log.e("AudioHandler", "read data error!");
+                        audioRecord.release();
+                        audioRecord = null;
+                        setSwitch(false);
+                        closeQuiet(os);
+                    } else {
+                        writeSafe(os, buffer);
+                    }
+                }
+
+            }
+        }
+
+
+        private boolean readError() {
+            return audioRecord == null || audioRecord.read(buffer, 0, minBufferSize) < AudioRecord.SUCCESS;
+        }
+
+        private void writeSafe(FileOutputStream os, byte[] data) {
+            if (os != null && data != null) {
+                try {
+                    os.write(data);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        private void closeQuiet(FileOutputStream os) {
+            if (os != null) {
+                try {
+                    os.close();
+                    os = null;
+                } catch (
+                        IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        private String buildRecordCachePath(String id) {
+            return PropertiesApi.getCustomizeMusicDir() + File.separator + id + ".pcm";
+        }
+
+
+        private File createOutputFile() {
+            String id = "demo_record_" + System.currentTimeMillis();
+            final File file = new File(buildRecordCachePath(id));
+            try {
+                file.createNewFile();
+            } catch (IOException e) {
+                e.printStackTrace();
+                return null;
+            }
+            return file;
+        }
+    }
+
     public void sendPic(String picpath) throws IOException {
-        Socket s = new Socket("10.135.188.31", 12345);//建立服务
+        Socket s = new Socket("10.128.63.126", 12345);//建立服务
         FileInputStream fis = new FileInputStream(picpath);//读取图片
         OutputStream out = s.getOutputStream();//读到的写入
         byte[] b = new byte[1024];
